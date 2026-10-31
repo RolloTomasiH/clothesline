@@ -5,3 +5,6 @@ build/
 .swiftpm/
 
 dist/
+windows/node_modules/
+windows/dist/
+

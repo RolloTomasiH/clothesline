@@ -1,0 +1,111 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <title>晾衣绳 · Clothesline for Windows</title>
+  <link rel="stylesheet" href="styles.css">
+</head>
+<body>
+  <!-- Top trigger sensor strip -->
+  <div id="sensor-bar"></div>
+
+  <!-- Main clothesline viewport -->
+  <div id="line-container">
+    <!-- SVG Sagging Clothesline -->
+    <svg id="rope-svg">
+      <defs>
+        <linearGradient id="ropeGrad" x1="0%" y1="0%" x2="100%" y2="0%">
+          <stop offset="0%" stop-color="rgba(255,255,255,0.2)"/>
+          <stop offset="20%" stop-color="rgba(240,240,245,0.7)"/>
+          <stop offset="50%" stop-color="rgba(255,255,255,0.9)"/>
+          <stop offset="80%" stop-color="rgba(240,240,245,0.7)"/>
+          <stop offset="100%" stop-color="rgba(255,255,255,0.2)"/>
+        </linearGradient>
+        <filter id="ropeGlow" x="-20%" y="-20%" width="140%" height="140%">
+          <feDropShadow dx="0" dy="1.5" stdDeviation="1" flood-color="rgba(0,0,0,0.5)"/>
+        </filter>
+      </defs>
+      <path id="rope-path" d="M 0 16 Q 960 28 1920 16" fill="none" stroke="url(#ropeGrad)" stroke-width="2.2" filter="url(#ropeGlow)"/>
+    </svg>
+
+    <!-- Top floating category bar -->
+    <header id="control-bar">
+      <div class="brand">
+        <span class="icon">🧺</span>
+        <span class="title">晾衣绳</span>
+      </div>
+
+      <nav class="category-tabs">
+        <button class="tab-btn active" data-cat="0">
+          <span class="tab-icon">📷</span>
+          <span>截图</span>
+          <span class="badge" id="badge-screenshots">0</span>
+        </button>
+        <button class="tab-btn" data-cat="1">
+          <span class="tab-icon">📋</span>
+          <span>剪贴板</span>
+          <span class="badge" id="badge-clipboard">0</span>
+        </button>
+        <button class="tab-btn" data-cat="2">
+          <span class="tab-icon">📝</span>
+          <span>便笺</span>
+          <span class="badge" id="badge-notes">0</span>
+        </button>
+      </nav>
+
+      <div class="actions">
+        <button id="btn-add-note" class="action-btn" title="新建便笺">
+          <span class="btn-icon">＋</span>
+          <span>新便笺</span>
+        </button>
+        <button id="btn-pin" class="action-btn" title="固定挂绳 (不自动收起)">
+          <span class="btn-icon" id="pin-icon">📌</span>
+        </button>
+        <button id="btn-clear" class="action-btn btn-danger" title="清空当前分类">
+          <span class="btn-icon">🗑️</span>
+        </button>
+      </div>
+    </header>
+
+    <!-- Hanging items stage -->
+    <main id="stage">
+      <div id="items-track"></div>
+      <div id="empty-hint" class="hint">
+        <span class="hint-icon">🪁</span>
+        <span class="hint-text" id="hint-msg">截屏或录屏，会自动晾在绳子上</span>
+      </div>
+    </main>
+  </div>
+
+  <!-- Note Editor Modal -->
+  <div id="note-modal" class="modal-overlay hidden">
+    <div class="modal-box">
+      <div class="modal-header">
+        <span class="modal-title">📝 新建挂绳便笺</span>
+        <button id="btn-close-modal" class="close-btn">&times;</button>
+      </div>
+      <div class="color-picker">
+        <label class="color-option active" style="--c: #fef08a;" data-color="yellow"></label>
+        <label class="color-option" style="--c: #bbf7d0;" data-color="green"></label>
+        <label class="color-option" style="--c: #bae6fd;" data-color="blue"></label>
+        <label class="color-option" style="--c: #fbcfe8;" data-color="pink"></label>
+        <label class="color-option" style="--c: #e9d5ff;" data-color="purple"></label>
+      </div>
+      <input type="text" id="note-title-input" class="note-input" placeholder="便笺标题 (可选)..." maxlength="30">
+      <textarea id="note-content-input" class="note-textarea" placeholder="写下临时要点、灵感或备忘..." rows="4"></textarea>
+      <div class="modal-footer">
+        <button id="btn-cancel-note" class="btn-secondary">取消</button>
+        <button id="btn-save-note" class="btn-primary">挂上晾衣绳</button>
+      </div>
+    </div>
+  </div>
+
+  <!-- Toast notification -->
+  <div id="toast" class="toast hidden">
+    <span id="toast-msg">已复制到剪贴板</span>
+  </div>
+
+  <script src="renderer.js"></script>
+</body>
+</html>

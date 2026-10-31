@@ -1,0 +1,57 @@
+{
+  "name": "clothesline-windows",
+  "productName": "晾衣绳",
+  "version": "1.5.2",
+  "description": "晾衣绳 (Clothesline) · 优雅挂起截图、剪贴板与便笺的 Windows 灵动挂绳工作台",
+  "main": "main.js",
+  "author": {
+    "name": "RolloTomasiH",
+    "email": "RolloTomasiH@users.noreply.github.com"
+  },
+  "license": "MIT",
+  "scripts": {
+    "start": "electron .",
+    "pack": "electron-builder --dir",
+    "dist": "electron-builder --win portable nsis --x64"
+  },
+  "dependencies": {
+    "chokidar": "^3.6.0"
+  },
+  "devDependencies": {
+    "electron": "^33.2.0",
+    "electron-builder": "^26.18.0"
+  },
+  "build": {
+    "appId": "com.clothesline.desktop",
+    "productName": "晾衣绳",
+    "copyright": "Copyright © 2026 RolloTomasiH (Based on alejandrobujan/tendedero)",
+    "directories": {
+      "output": "dist"
+    },
+    "win": {
+      "target": [
+        {
+          "target": "portable",
+          "arch": ["x64"]
+        },
+        {
+          "target": "nsis",
+          "arch": ["x64"]
+        }
+      ],
+      "icon": "assets/icon.ico",
+      "artifactName": "${productName}-${version}-Windows-${arch}.${ext}"
+    },
+    "nsis": {
+      "oneClick": false,
+      "perMachine": false,
+      "allowToChangeInstallationDirectory": true,
+      "createDesktopShortcut": true,
+      "createStartMenuShortcut": true,
+      "shortcutName": "晾衣绳"
+    },
+    "portable": {
+      "artifactName": "${productName}-${version}-Windows-Portable-x64.exe"
+    }
+  }
+}
