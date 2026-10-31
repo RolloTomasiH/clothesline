@@ -24,7 +24,7 @@ enum Layout {
     static var photoMaxHeight: CGFloat { (104 * size.scale).rounded() }
     static var cardWidth: CGFloat { (150 * size.scale).rounded() }
     static var spacing: CGFloat { cardWidth + 24 }
-    static var panelHeight: CGFloat { photoMaxHeight + 106 }
+    static var panelHeight: CGFloat { photoMaxHeight + 118 }
     static let ropeTop: CGFloat = 10
     static let pinAbove: CGFloat = 9.5
 
@@ -37,7 +37,7 @@ enum Layout {
         return ropeTop + 4 * sag(width: width) * f * (1 - f)
     }
 
-    /// Photos hang `spacing` apart, centred. When there are more than the
+    /// Items hang `spacing` apart, centred. When there are more than the
     /// `visible` that fit: with Keep on line set, they keep their spacing,
     /// the newest stays where the last one would hang on a full line, and
     /// `scroll` brings older ones in from the left. Otherwise (a line hung
@@ -60,30 +60,75 @@ struct LineView: View {
         GeometryReader { geo in
             let width = geo.size.width
             ZStack(alignment: .topLeading) {
+                // The hanging rope
                 Rope(width: width)
 
-                if line.items.isEmpty {
-                    Hint()
-                        .position(x: width / 2, y: Layout.ropeY(x: width / 2, width: width) + 34)
-                        .transition(.opacity)
+                // Category-specific items on the line
+                switch line.category {
+                case .screenshots:
+                    if line.items.isEmpty {
+                        Hint(text: "拍张截图或录屏，它就会挂在晾衣绳上")
+                            .position(x: width / 2, y: Layout.ropeY(x: width / 2, width: width) + 38)
+                            .transition(.opacity)
+                    }
+
+                    ForEach(Array(line.items.enumerated()), id: \.element.id) { index, item in
+                        let x = Layout.x(index: index, count: line.items.count, width: width,
+                                         visible: line.visibleCount, scroll: line.scroll)
+                        let ropeY = Layout.ropeY(x: x, width: width)
+                        PeggedView(item: item, line: line)
+                            .frame(width: Layout.cardWidth, height: Layout.panelHeight - ropeY - 26, alignment: .top)
+                            .opacity(min(1, max(0, min(x, width - x) / 90)))
+                            .position(x: x, y: ropeY - Layout.pinAbove + (Layout.panelHeight - ropeY - 26) / 2)
+                    }
+
+                case .clipboard:
+                    if line.clipboardItems.isEmpty {
+                        Hint(text: "复制一段文字，它就会自动挂在晾衣绳上")
+                            .position(x: width / 2, y: Layout.ropeY(x: width / 2, width: width) + 38)
+                            .transition(.opacity)
+                    }
+
+                    ForEach(Array(line.clipboardItems.enumerated()), id: \.element.id) { index, item in
+                        let x = Layout.x(index: index, count: line.clipboardItems.count, width: width,
+                                         visible: line.visibleCount, scroll: line.scroll)
+                        let ropeY = Layout.ropeY(x: x, width: width)
+                        ClipboardPeggedView(item: item, line: line)
+                            .frame(width: Layout.cardWidth + 10, height: Layout.panelHeight - ropeY - 26, alignment: .top)
+                            .opacity(min(1, max(0, min(x, width - x) / 90)))
+                            .position(x: x, y: ropeY - Layout.pinAbove + (Layout.panelHeight - ropeY - 26) / 2)
+                    }
+
+                case .notes:
+                    if line.noteItems.isEmpty {
+                        Hint(text: "点击下方「+ 新建」或按 ⌘N 创建流光便笺")
+                            .position(x: width / 2, y: Layout.ropeY(x: width / 2, width: width) + 38)
+                            .transition(.opacity)
+                    }
+
+                    ForEach(Array(line.noteItems.enumerated()), id: \.element.id) { index, item in
+                        let x = Layout.x(index: index, count: line.noteItems.count, width: width,
+                                         visible: line.visibleCount, scroll: line.scroll)
+                        let ropeY = Layout.ropeY(x: x, width: width)
+                        NotePeggedView(item: item, line: line)
+                            .frame(width: Layout.cardWidth + 10, height: Layout.panelHeight - ropeY - 26, alignment: .top)
+                            .opacity(min(1, max(0, min(x, width - x) / 90)))
+                            .position(x: x, y: ropeY - Layout.pinAbove + (Layout.panelHeight - ropeY - 26) / 2)
+                    }
                 }
 
-                ForEach(Array(line.items.enumerated()), id: \.element.id) { index, item in
-                    let x = Layout.x(index: index, count: line.items.count, width: width,
-                                     visible: line.visibleCount, scroll: line.scroll)
-                    let ropeY = Layout.ropeY(x: x, width: width)
-                    PeggedView(item: item, line: line)
-                        .frame(width: Layout.cardWidth, height: Layout.panelHeight - ropeY, alignment: .top)
-                        // Photos scrolled towards an edge fade out before they reach it.
-                        .opacity(min(1, max(0, min(x, width - x) / 90)))
-                        .position(x: x, y: ropeY - Layout.pinAbove + (Layout.panelHeight - ropeY) / 2)
-                }
+                // Bottom Category Switcher Pill
+                CategoryBar(line: line)
+                    .position(x: width / 2, y: Layout.panelHeight - 18)
             }
-            .animation(.spring(response: 0.55, dampingFraction: 0.78), value: line.items.map(\.id))
-            .animation(.easeInOut(duration: 0.3), value: line.items.isEmpty)
+            .animation(.spring(response: 0.52, dampingFraction: 0.78), value: line.category)
+            .animation(.spring(response: 0.52, dampingFraction: 0.78), value: line.items.map(\.id))
+            .animation(.spring(response: 0.52, dampingFraction: 0.78), value: line.clipboardItems.map(\.id))
+            .animation(.spring(response: 0.52, dampingFraction: 0.78), value: line.noteItems.map(\.id))
+            .animation(.easeInOut(duration: 0.25), value: line.liveCount == 0)
             // Tucked away, the whole line waits above the top edge and slides
             // out from under the menu bar, the way an auto-hiding Dock does.
-            .offset(y: line.revealed ? 0 : -(Layout.panelHeight + 12))
+            .offset(y: line.revealed ? 0 : -(Layout.panelHeight + 14))
             .animation(line.revealed ? .spring(response: 0.42, dampingFraction: 0.82)
                                      : .easeIn(duration: 0.22), value: line.revealed)
         }
@@ -93,14 +138,115 @@ struct LineView: View {
     }
 }
 
-private struct Hint: View {
+/// Floating Liquid Glass Category Switcher & Action Capsule Bar
+private struct CategoryBar: View {
+    @ObservedObject var line: Line
+    static let hitID = UUID(uuidString: "77777777-8888-9999-aaaa-bbbbbbbbbbbb")!
+
     var body: some View {
-        Text(L("Take a screenshot and it will hang here"))
+        HStack(spacing: 5) {
+            tabButton(title: "截图", icon: "camera.fill", count: line.items.count, category: .screenshots)
+            tabButton(title: "剪贴板", icon: "doc.on.clipboard.fill", count: line.clipboardItems.count, category: .clipboard)
+            tabButton(title: "便笺", icon: "note.text", count: line.noteItems.count, category: .notes)
+
+            Rectangle()
+                .fill(Color.white.opacity(0.2))
+                .frame(width: 1, height: 13)
+                .padding(.horizontal, 2)
+
+            Button(action: {
+                if line.category != .notes {
+                    withAnimation(.spring(response: 0.35, dampingFraction: 0.75)) {
+                        line.category = .notes
+                    }
+                }
+                _ = line.createNote()
+            }) {
+                HStack(spacing: 3) {
+                    Image(systemName: "plus")
+                        .font(.system(size: 9.5, weight: .bold))
+                    Text("新建")
+                        .font(.system(size: 11, weight: .semibold, design: .rounded))
+                }
+                .foregroundStyle(.primary)
+                .padding(.horizontal, 8)
+                .padding(.vertical, 3.5)
+                .background(Color.white.opacity(0.16), in: Capsule())
+            }
+            .buttonStyle(.plain)
+            .help("新建流光便笺 (⌘N)")
+        }
+        .padding(.horizontal, 6)
+        .padding(.vertical, 4)
+        .background(.ultraThinMaterial, in: Capsule())
+        .overlay(
+            Capsule()
+                .strokeBorder(
+                    LinearGradient(
+                        colors: [Color.white.opacity(0.38), Color.white.opacity(0.12)],
+                        startPoint: .topLeading,
+                        endPoint: .bottomTrailing
+                    ),
+                    lineWidth: 0.75
+                )
+        )
+        .shadow(color: .black.opacity(0.18), radius: 8, y: 3)
+        .background(
+            GeometryReader { g in
+                Color.clear.preference(key: HitRectsKey.self, value: [Self.hitID: g.frame(in: .global)])
+            }
+        )
+    }
+
+    private func tabButton(title: String, icon: String, count: Int, category: LineCategory) -> some View {
+        let isSelected = line.category == category
+        return Button(action: {
+            withAnimation(.spring(response: 0.35, dampingFraction: 0.75)) {
+                line.category = category
+            }
+        }) {
+            HStack(spacing: 4) {
+                Image(systemName: icon)
+                    .font(.system(size: 9.5, weight: .semibold))
+                Text(title)
+                    .font(.system(size: 11, weight: isSelected ? .bold : .medium, design: .rounded))
+                if count > 0 {
+                    Text("\(count)")
+                        .font(.system(size: 9, weight: .bold, design: .rounded))
+                        .foregroundStyle(isSelected ? .white : .secondary)
+                        .padding(.horizontal, 4.5)
+                        .padding(.vertical, 1)
+                        .background(isSelected ? Color.white.opacity(0.28) : Color.white.opacity(0.12), in: Capsule())
+                }
+            }
+            .foregroundStyle(isSelected ? .primary : .secondary)
+            .padding(.horizontal, 8)
+            .padding(.vertical, 3.5)
+            .background(
+                isSelected
+                    ? AnyShapeStyle(Color.white.opacity(0.22))
+                    : AnyShapeStyle(Color.clear),
+                in: Capsule()
+            )
+        }
+        .buttonStyle(.plain)
+    }
+}
+
+private struct Hint: View {
+    let text: String
+
+    var body: some View {
+        Text(text)
             .font(.system(size: 12, weight: .medium, design: .rounded))
             .foregroundStyle(.secondary)
-            .padding(.horizontal, 12)
+            .padding(.horizontal, 14)
             .padding(.vertical, 6)
             .background(.regularMaterial, in: Capsule())
+            .overlay(
+                Capsule().strokeBorder(Color.white.opacity(0.18), lineWidth: 0.5)
+            )
+            .shadow(color: .black.opacity(0.12), radius: 6, y: 2)
     }
 }
 

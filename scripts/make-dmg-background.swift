@@ -47,7 +47,7 @@ head.lineJoinStyle = .round
 head.stroke()
 
 let style = NSMutableParagraphStyle(); style.alignment = .center
-let text = NSAttributedString(string: "Drag Tendedero to Applications", attributes: [
+let text = NSAttributedString(string: "将「晾衣绳」拖入 Applications 文件夹即可完成安装", attributes: [
     .font: NSFont.systemFont(ofSize: 13, weight: .medium),
     .foregroundColor: color(80, 84, 100),
     .paragraphStyle: style,

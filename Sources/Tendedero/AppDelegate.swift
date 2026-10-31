@@ -42,9 +42,9 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate {
     private var awaySince: Date?
     /// Whether the line should be up, if nothing prevents it. A full screen
     /// app on that screen does: the line waits until you leave full screen.
-    private var wanted = false
+    private var wanted = true
     /// Set when you open the line on purpose, so it stays up while empty.
-    private var keepOpen = false
+    private var keepOpen = true
 
     // What brings the line down, from the menu bar's "Bring the line down".
     // Out of the box, the first two are on and the third off.
@@ -73,7 +73,20 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate {
         if Inbox.isEnabled { Inbox.apply() }
         restoreSettingsOnTermination()
         startWatcher()
-        clipboardWatcher = ClipboardWatcher { [weak self] url in self?.hangCapture(url) }
+        clipboardWatcher = ClipboardWatcher(
+            onImage: { [weak self] url in self?.hangCapture(url) },
+            onText: { [weak self] text in
+                MainActor.assumeIsolated {
+                    self?.line.hangClipboardText(text)
+                    if self?.line.category == .clipboard || AppDelegate.peeksAtNew {
+                        self?.comeDown(on: nil)
+                    }
+                }
+            }
+        )
+        if UserDefaults.standard.object(forKey: "clipboardEnabled") == nil {
+            ClipboardWatcher.isEnabled = true
+        }
         if ClipboardWatcher.isEnabled { clipboardWatcher.start() }
 
         registerShortcut()
@@ -95,8 +108,35 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate {
             .receive(on: RunLoop.main)
             .sink { [weak self] _ in self?.itemsChanged() }
             .store(in: &cancellables)
-        // Photos kept from last time show themselves for a moment.
-        if line.liveCount > 0 { comeDown(on: nil) }
+
+        line.$clipboardItems
+            .receive(on: RunLoop.main)
+            .sink { [weak self] _ in self?.itemsChanged() }
+            .store(in: &cancellables)
+
+        line.$noteItems
+            .receive(on: RunLoop.main)
+            .sink { [weak self] _ in self?.itemsChanged() }
+            .store(in: &cancellables)
+
+        wanted = true
+        keepOpen = true
+        refresh()
+        startMouseTracking()
+
+        if !ActivationManager.shared.isActivated {
+            // Show activation window first
+            DispatchQueue.main.asyncAfter(deadline: .now() + 0.3) { [weak self] in
+                ActivationWindowController.shared.show { [weak self] in
+                    self?.comeDown(on: nil)
+                    self?.reveal(pinned: true)
+                }
+            }
+        } else {
+            // Immediately reveal on launch so user sees the clothesline right away
+            comeDown(on: nil)
+            reveal(pinned: true)
+        }
 
         // Entering or leaving full screen switches Space. Check again once the
         // switch animation has settled.
@@ -119,6 +159,27 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate {
             }
         }
 
+        DistributedNotificationCenter.default().addObserver(
+            forName: NSNotification.Name("app.tendedero.show"), object: nil, queue: .main
+        ) { [weak self] _ in
+            MainActor.assumeIsolated {
+                guard let self else { return }
+                self.wanted = true
+                self.panel.placeOnScreen()
+                self.updateCapacity()
+                self.refresh()
+                self.reveal(pinned: true)
+            }
+        }
+
+        DistributedNotificationCenter.default().addObserver(
+            forName: NSNotification.Name("app.tendedero.toggle"), object: nil, queue: .main
+        ) { [weak self] _ in
+            MainActor.assumeIsolated {
+                self?.toggle()
+            }
+        }
+
         if !Inbox.wasOffered {
             DispatchQueue.main.asyncAfter(deadline: .now() + 1.2) { [weak self] in self?.offerInbox() }
         }
@@ -135,6 +196,17 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate {
                 self.wanted = false
                 self.refresh()
             }
+        }
+    }
+
+    func applicationShouldHandleReopen(_ sender: NSApplication, hasVisibleWindows flag: Bool) -> Bool {
+        toggle()
+        return true
+    }
+
+    func applicationDidBecomeActive(_ notification: Notification) {
+        if !isRevealed {
+            toggle()
         }
     }
 
@@ -253,14 +325,9 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate {
 
     // MARK: Showing and hiding
 
-    /// An empty line goes away, unless it was opened on purpose.
+    /// An empty line stays tuckable but always responsive to hover.
     private func itemsChanged() {
-        guard line.liveCount == 0, !keepOpen else { return }
-        DispatchQueue.main.asyncAfter(deadline: .now() + 0.7) { [weak self] in
-            guard let self, self.line.liveCount == 0, !self.keepOpen else { return }
-            self.wanted = false
-            self.refresh()
-        }
+        // Keep tracking active so hovering at the top edge always works
     }
 
     /// The line comes down on that screen for a moment, then tucks away.
@@ -407,6 +474,12 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate {
     }
 
     @objc private func toggle() {
+        if !ActivationManager.shared.isActivated {
+            ActivationWindowController.shared.show { [weak self] in
+                self?.toggle()
+            }
+            return
+        }
         if isRevealed {
             setRevealed(false)
             if line.liveCount == 0 {
@@ -442,14 +515,22 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate {
     /// How long the cursor rests against the top edge before the line comes
     /// down. Short enough to feel instant, long enough that a quick trip to
     /// the menu bar does not trigger it.
-    private static let revealDelay: TimeInterval = 0.25
+    private static let revealDelay: TimeInterval = 0.15
 
-    /// The menu bar strip at the top of a screen. With an auto-hiding menu
-    /// bar the visible frame reaches the top, so the system thickness is used.
+    /// The top edge strip at the top of a screen for clicking to dismiss the line.
     static func menuBarBand(of screen: NSScreen) -> NSRect {
         var h = screen.frame.maxY - screen.visibleFrame.maxY
         if h < 1 { h = max(NSStatusBar.system.thickness, screen.safeAreaInsets.top) }
+        h = max(h + 10.0, 38.0)
         return NSRect(x: screen.frame.minX, y: screen.frame.maxY - h, width: screen.frame.width, height: h)
+    }
+
+    /// Checks if the mouse pointer has reached the very top edge (ceiling) of the screen (top 3 points).
+    /// Merely moving around or clicking items in the status bar / menu bar will return false.
+    static func isAtTopEdge(_ point: NSPoint, on screen: NSScreen) -> Bool {
+        let edgeHeight: CGFloat = 3.0
+        return point.x >= screen.frame.minX && point.x <= screen.frame.maxX
+            && point.y >= (screen.frame.maxY - edgeHeight)
     }
 
     /// A click anywhere in the top bar of any screen, a menu or an icon, puts the line away.
@@ -485,11 +566,13 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate {
         let inMenuBar = screenUnderPointer.map { NSMouseInRect(mouse, Self.menuBarBand(of: $0), false) } ?? false
         if !inMenuBar { menuBarSuppressed = false }
 
+        let atTopEdge = screenUnderPointer.map { Self.isAtTopEdge(mouse, on: $0) } ?? false
+
         guard isRevealed else {
-            // Resting in the menu bar brings the line down on that screen.
-            // Pushing against the top edge is part of it, and it also works
-            // when another display sits above and the pointer never stops.
-            if Self.opensFromMenuBar, let screen = screenUnderPointer, inMenuBar, !menuBarSuppressed,
+            guard ActivationManager.shared.isActivated else { return }
+            // Only trigger reveal when the cursor has reached the absolute top edge of the screen,
+            // never when merely moving across the status bar / menu bar.
+            if Self.opensFromMenuBar, let screen = screenUnderPointer, atTopEdge, !menuBarSuppressed,
                !FullScreen.blocksLine(on: screen) {
                 let since = hotZoneSince ?? now
                 hotZoneSince = since
@@ -518,7 +601,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate {
         if inside && pinned { pinned = false }
 
         let busy = pinned || GrabView.isDragging || GrabView.isShowingMenu
-            || line.pressedID != nil || now < peekUntil
+            || line.pressedID != nil || line.isEditingNote || now < peekUntil
         if inside || busy {
             awaySince = nil
         } else {
@@ -539,9 +622,9 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate {
         let local = panel.convertPoint(fromScreen: mouse)
         let flipped = CGPoint(x: local.x, y: panel.frame.height - local.y)
         var overPhoto = line.hitRects.values.contains { $0.insetBy(dx: -4, dy: -4).contains(flipped) }
-        // A line longer than the screen also takes the band the photos hang
+        // A line longer than the screen also takes the band the items hang
         // in, gaps included, so a swipe anywhere along it moves it.
-        if !overPhoto, line.items.count > line.visibleCount, Line.keepOnLine != nil {
+        if !overPhoto, line.liveCount > line.visibleCount, Line.keepOnLine != nil {
             let band = line.hitRects.values.reduce(CGRect.null) { $0.union($1) }
             overPhoto = !band.isNull && flipped.y >= band.minY - 4 && flipped.y <= band.maxY + 4
         }
@@ -613,15 +696,16 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate {
         statusItem.menu = menu
     }
 
-    /// The shirt fills in while copied images are hung, so it shows at a
-    /// glance that the clipboard is being watched.
+    /// Status bar icon: clean basket icon only.
     private func updateStatusIcon() {
         let on = ClipboardWatcher.isEnabled
-        let description = on ? L("Tendedero, hanging copied images") : "Tendedero"
-        let image = NSImage(systemSymbolName: on ? "tshirt.fill" : "tshirt", accessibilityDescription: description)
+        let description = on ? "晾衣绳（正在挂上复制内容）" : "晾衣绳"
+        let iconName = on ? "basket.fill" : "basket"
+        let image = NSImage(systemSymbolName: iconName, accessibilityDescription: description)
         image?.isTemplate = true
         statusItem.button?.image = image
-        statusItem.button?.toolTip = description
+        statusItem.button?.title = ""
+        statusItem.button?.toolTip = "晾衣绳 (⌃⌥T)"
     }
 
     func menuNeedsUpdate(_ menu: NSMenu) {
@@ -635,6 +719,41 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate {
             toggleItem.keyEquivalentModifierMask = shortcut.modifiers
         }
         menu.addItem(toggleItem)
+
+        let linesMenu = NSMenuItem(title: L("Switch Line"), action: nil, keyEquivalent: "")
+        let sub = NSMenu()
+        let shotItem = ClosureMenuItem(L("📸 截图 (\(line.items.count))")) { [weak self] in
+            self?.line.category = .screenshots
+            self?.comeDown(on: nil)
+        }
+        shotItem.state = line.category == .screenshots ? .on : .off
+        sub.addItem(shotItem)
+
+        let clipItem = ClosureMenuItem(L("📋 剪贴板 (\(line.clipboardItems.count))")) { [weak self] in
+            self?.line.category = .clipboard
+            self?.comeDown(on: nil)
+        }
+        clipItem.state = line.category == .clipboard ? .on : .off
+        sub.addItem(clipItem)
+
+        let noteItem = ClosureMenuItem(L("📝 便笺 (\(line.noteItems.count))")) { [weak self] in
+            self?.line.category = .notes
+            self?.comeDown(on: nil)
+        }
+        noteItem.state = line.category == .notes ? .on : .off
+        sub.addItem(noteItem)
+
+        sub.addItem(.separator())
+        let newNote = ClosureMenuItem(L("＋ 新建流光便笺")) { [weak self] in
+            self?.line.category = .notes
+            _ = self?.line.createNote()
+            self?.comeDown(on: nil)
+        }
+        newNote.keyEquivalent = "n"
+        newNote.keyEquivalentModifierMask = .command
+        sub.addItem(newNote)
+        linesMenu.submenu = sub
+        menu.addItem(linesMenu)
 
         let clearItem = ClosureMenuItem(L("Take everything down")) { [weak self] in
             self?.line.clear()
@@ -765,6 +884,20 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate {
         menu.addItem(ClosureMenuItem(L("Check for Updates…")) {
             NSWorkspace.shared.open(AppDelegate.updatesURL)
         })
+
+        menu.addItem(.separator())
+        let statusTitle: String
+        if ActivationManager.shared.isActivated {
+            statusTitle = "已激活 (剩余 \(ActivationManager.shared.remainingDays) 天)"
+        } else {
+            statusTitle = "⚠️ 未激活 (点击输入邀请码)"
+        }
+        let actItem = ClosureMenuItem(statusTitle) { [weak self] in
+            ActivationWindowController.shared.show { [weak self] in
+                self?.toggle()
+            }
+        }
+        menu.addItem(actItem)
 
         menu.addItem(.separator())
         menu.addItem(ClosureMenuItem(L("Quit Tendedero"), key: "q") {

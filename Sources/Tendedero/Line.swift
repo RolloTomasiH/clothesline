@@ -47,6 +47,25 @@ final class Line: ObservableObject {
     /// the newest.
     @Published var scroll: CGFloat = 0
 
+    /// The three clotheslines (Screenshots, Clipboard, Notes)
+    @Published var category: LineCategory = {
+        if UserDefaults.standard.object(forKey: "lineCategory") != nil {
+            let raw = UserDefaults.standard.integer(forKey: "lineCategory")
+            return LineCategory(rawValue: raw) ?? .notes
+        }
+        return .notes
+    }() {
+        didSet {
+            UserDefaults.standard.set(category.rawValue, forKey: "lineCategory")
+            scroll = 0
+        }
+    }
+
+    /// Items for the other two lines
+    @Published var clipboardItems: [PeggedClipboardText] = []
+    @Published var noteItems: [PeggedNote] = []
+    @Published var isEditingNote = false
+
     /// Keep on line, from the menu bar: how many photos the line keeps, or
     /// nil for as many as fit across the screen.
     nonisolated static let keepChoices = [25, 50, 100]
@@ -64,9 +83,17 @@ final class Line: ObservableObject {
         set { UserDefaults.standard.set(!newValue, forKey: "soundOff") }
     }
 
-    var liveCount: Int { items.filter { !$0.falling }.count }
+    var liveCount: Int {
+        switch category {
+        case .screenshots: return items.filter { !$0.falling }.count
+        case .clipboard: return clipboardItems.filter { !$0.falling }.count
+        case .notes: return noteItems.filter { !$0.falling }.count
+        }
+    }
 
     private let storeKey = "pegged"
+    private let clipboardStoreKey = "peggedClipboard"
+    private let notesStoreKey = "peggedNotes"
 
     init() {
         restore()
@@ -116,9 +143,16 @@ final class Line: ObservableObject {
         }
     }
 
-    /// "Take everything down": every photo goes the way of its corner cross.
+    /// "Take everything down": clear items on current category.
     func clear() {
-        takeDown(items.filter { !$0.falling })
+        switch category {
+        case .screenshots:
+            takeDown(items.filter { !$0.falling })
+        case .clipboard:
+            for item in clipboardItems { dropClipboardText(item.id, quietly: true) }
+        case .notes:
+            for note in noteItems { dropNote(note.id, quietly: true) }
+        }
     }
 
     /// The photos hung before (left) or after (right) this one.
@@ -159,9 +193,11 @@ final class Line: ObservableObject {
         // A recording is copied as the file, which apps paste as the video.
         if !item.isRecording, let png = pngData(item.url) { entry.setData(png, forType: .png) }
         entry.setString(item.url.absoluteString, forType: .fileURL)
+        entry.setString("1", forType: ClipboardWatcher.selfCopyType)
         let pb = NSPasteboard.general
         pb.clearContents()
         pb.writeObjects([entry])
+        ClipboardWatcher.recordSelfCopy()
 
         copiedID = id
         DispatchQueue.main.asyncAfter(deadline: .now() + 1.2) { [weak self] in
@@ -215,7 +251,13 @@ final class Line: ObservableObject {
     /// of that folder. If the Trash refuses it, it still leaves the line.
     /// Moves along a line that holds more than fit, from a scroll gesture.
     func scroll(by delta: CGFloat) {
-        let most = CGFloat(max(0, items.count - visibleCount)) * Layout.spacing
+        let count: Int
+        switch category {
+        case .screenshots: count = items.count
+        case .clipboard: count = clipboardItems.count
+        case .notes: count = noteItems.count
+        }
+        let most = CGFloat(max(0, count - visibleCount)) * Layout.spacing
         let next = min(most, max(0, scroll + delta))
         if next != scroll { scroll = next }
     }
@@ -309,22 +351,130 @@ final class Line: ObservableObject {
         }
     }
 
+    // MARK: Clipboard Texts Management
+
+    @discardableResult
+    func hangClipboardText(_ text: String, quietly: Bool = false) -> UUID? {
+        let trimmed = text.trimmingCharacters(in: .whitespacesAndNewlines)
+        guard !trimmed.isEmpty else { return nil }
+
+        // If identical text is already on the line:
+        if let existingIndex = clipboardItems.firstIndex(where: { !$0.falling && $0.text == trimmed }) {
+            if existingIndex == 0 {
+                // Already the first card, do not duplicate
+                return clipboardItems[0].id
+            }
+            // Move existing card to front and refresh date, avoiding duplicates
+            var existing = clipboardItems.remove(at: existingIndex)
+            existing.date = Date()
+            clipboardItems.insert(existing, at: 0)
+            scroll = 0
+            saveClipboard()
+            if !quietly { play("Tink", volume: 0.35) }
+            return existing.id
+        }
+
+        let item = PeggedClipboardText(text: trimmed)
+        clipboardItems.insert(item, at: 0)
+        scroll = 0
+        if clipboardItems.count > 25 {
+            clipboardItems.removeLast()
+        }
+        saveClipboard()
+        if !quietly { play("Tink", volume: 0.35) }
+        return item.id
+    }
+
+    func dropClipboardText(_ id: UUID, quietly: Bool = false) {
+        guard let i = clipboardItems.firstIndex(where: { $0.id == id }) else { return }
+        clipboardItems[i].falling = true
+        saveClipboard()
+        if !quietly { play("Pop", volume: 0.25) }
+        DispatchQueue.main.asyncAfter(deadline: .now() + 0.45) { [weak self] in
+            self?.clipboardItems.removeAll { $0.id == id }
+            self?.saveClipboard()
+        }
+    }
+
+    // MARK: Sticky Notes Management
+
+    @discardableResult
+    func createNote(title: String = "新便笺", content: String = "- [ ] 待办事项\n#核心目标", tint: String = "amber") -> UUID {
+        let note = PeggedNote(title: title, content: content, tint: tint)
+        noteItems.insert(note, at: 0)
+        scroll = 0
+        saveNotes()
+        play("Tink", volume: 0.35)
+        return note.id
+    }
+
+    func updateNote(_ note: PeggedNote) {
+        if let i = noteItems.firstIndex(where: { $0.id == note.id }) {
+            noteItems[i] = note
+            saveNotes()
+        }
+    }
+
+    func dropNote(_ id: UUID, quietly: Bool = false) {
+        guard let i = noteItems.firstIndex(where: { $0.id == id }) else { return }
+        noteItems[i].falling = true
+        saveNotes()
+        if !quietly { play("Pop", volume: 0.25) }
+        DispatchQueue.main.asyncAfter(deadline: .now() + 0.45) { [weak self] in
+            self?.noteItems.removeAll { $0.id == id }
+            self?.saveNotes()
+        }
+    }
+
     // MARK: Persistence
 
     private func save() {
         let paths = items.filter { !$0.falling }.map(\.url.path)
         UserDefaults.standard.set(paths, forKey: storeKey)
+        saveClipboard()
+        saveNotes()
     }
 
-    /// Everything comes back as it was. This runs before the line knows its
-    /// screen, so the capacity is still the default one: hanging through
-    /// `hang` would let photos fall off a wide screen's line at every launch.
+    private func saveClipboard() {
+        let live = clipboardItems.filter { !$0.falling }
+        if let data = try? JSONEncoder().encode(live) {
+            UserDefaults.standard.set(data, forKey: clipboardStoreKey)
+        }
+    }
+
+    private func saveNotes() {
+        let live = noteItems.filter { !$0.falling }
+        if let data = try? JSONEncoder().encode(live) {
+            UserDefaults.standard.set(data, forKey: notesStoreKey)
+        }
+    }
+
     private func restore() {
         let paths = UserDefaults.standard.stringArray(forKey: storeKey) ?? []
         for path in paths where FileManager.default.fileExists(atPath: path) {
             let url = URL(fileURLWithPath: path)
             guard !items.contains(where: { $0.url == url }), let thumb = makeThumbnail(url) else { continue }
             items.append(Pegged(url: url, thumb: thumb))
+        }
+
+        // Restore Clipboard
+        if let data = UserDefaults.standard.data(forKey: clipboardStoreKey),
+           let list = try? JSONDecoder().decode([PeggedClipboardText].self, from: data) {
+            clipboardItems = list
+        }
+
+        // Restore Notes
+        if let data = UserDefaults.standard.data(forKey: notesStoreKey),
+           let list = try? JSONDecoder().decode([PeggedNote].self, from: data), !list.isEmpty {
+            noteItems = list
+        } else {
+            // Initial default notes to showcase iOS 27 Liquid Glass
+            noteItems = [
+                PeggedNote(title: "🎯 盘前关注核心备忘", content: "- [x] 拓荆科技 CVD 薄膜替代进展\n- [ ] Marvell (MRVL) CXL弹性测算\n- [ ] 检查国信/中信流动性指标\n#半导体 #投资", tint: "amber"),
+                PeggedNote(title: "🦢 iOS 27 流光设计心得", content: "1. 光线是折射而非描画\n2. 纯净光学毛玻璃夹带金弹簧\n3. 随着微风物理阻尼摆动\n#iOS27 #设计", tint: "glacier"),
+                PeggedNote(title: "💡 灵感待办便笺", content: "- [ ] 体验三根晾衣绳自由切换\n- [ ] 享受清脆微触感夹具音效\n#灵感", tint: "violet")
+            ]
+            saveNotes()
         }
     }
 

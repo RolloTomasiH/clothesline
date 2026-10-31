@@ -32,7 +32,7 @@ final class LinePanel: NSPanel {
         }
     }
 
-    override var canBecomeKey: Bool { false }
+    override var canBecomeKey: Bool { true }
     override var canBecomeMain: Bool { false }
 
     /// The line hangs on the screen you are using, which is the one with the
